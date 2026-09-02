@@ -200,8 +200,9 @@ fun HomeScreen(
         )
     }
 
-    val blurRadius = appearance.blurIntensity.blurRadiusDp
-    val graphicsLayerModifier = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && blurRadius > 0f) {
+    // Isolated background blur render effect for background surface layer only
+    val blurRadius = if (appearance.surfaceAppearance == SurfaceAppearance.SOLID_MINIMAL) 0f else appearance.blurIntensity.blurRadiusDp
+    val backgroundBlurGraphicsLayer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && blurRadius > 0f) {
         Modifier.graphicsLayer {
             renderEffect = RenderEffect.createBlurEffect(
                 blurRadius, blurRadius, Shader.TileMode.CLAMP
@@ -214,8 +215,6 @@ fun HomeScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .then(backgroundModifier)
-            .then(graphicsLayerModifier)
             .pointerInput(Unit) {
                 detectTapGestures(
                     onDoubleTap = {
@@ -237,6 +236,15 @@ fun HomeScreen(
                 }
             }
     ) {
+        // LAYER 1: Dedicated Background Surface Layer (Receives RenderEffect Blur)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(backgroundModifier)
+                .then(backgroundBlurGraphicsLayer)
+        )
+
+        // LAYER 2: Foreground UI Elements (Sharp, Readable, Crisp)
         Column(
             modifier = Modifier
                 .fillMaxSize()

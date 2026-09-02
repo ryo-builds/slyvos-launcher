@@ -11,10 +11,10 @@ android {
         applicationId = "com.slyvos.launcher"
         minSdk = 26
         targetSdk = 36
-        versionCode = 7
-        versionName = "Pre-Alpha Build #007"
+        versionCode = 8
+        versionName = "Pre-Alpha Build #008"
 
-        buildConfigField("int", "BUILD_NUMBER", "7")
+        buildConfigField("int", "BUILD_NUMBER", "8")
         buildConfigField("String", "RELEASE_STAGE", "\"PRE_ALPHA\"")
         buildConfigField("long", "BUILD_TIMESTAMP", "${System.currentTimeMillis()}L")
     }
