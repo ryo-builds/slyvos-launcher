@@ -178,10 +178,11 @@ fun AppDrawerSheet(
 }
 
 @Composable
-private fun SearchInputBar(
+fun SearchInputBar(
     query: String,
     onQueryChange: (String) -> Unit,
-    onClear: () -> Unit
+    onClear: () -> Unit,
+    placeholderText: String = "Search applications..."
 ) {
     Surface(
         color = Color.White.copy(alpha = 0.08f),
@@ -208,7 +209,7 @@ private fun SearchInputBar(
             Box(modifier = Modifier.weight(1f)) {
                 if (query.isEmpty()) {
                     Text(
-                        text = "Search applications...",
+                        text = placeholderText,
                         color = Color.White.copy(alpha = 0.4f),
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Normal
