@@ -4,7 +4,9 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,8 +29,10 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,12 +40,17 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.slyvos.launcher.data.model.DoubleTapAction
+import com.slyvos.launcher.data.model.LongPressAction
 import com.slyvos.launcher.data.repository.PackageManagerAppRepository
+import com.slyvos.launcher.data.repository.PreferencesPersonalizationRepository
 import com.slyvos.launcher.data.repository.PreferencesWidgetRepository
 import com.slyvos.launcher.data.repository.SystemWidgetDiscoveryRepository
 import com.slyvos.launcher.dynamicbar.manager.DynamicBarManager
@@ -51,6 +60,8 @@ import com.slyvos.launcher.ui.home.components.AppDrawerSheet
 import com.slyvos.launcher.ui.home.components.AppIconItem
 import com.slyvos.launcher.ui.home.components.ClockHeader
 import com.slyvos.launcher.ui.home.components.DockSurface
+import com.slyvos.launcher.ui.personalization.DockAppPickerSheet
+import com.slyvos.launcher.ui.personalization.PersonalizationSheet
 import com.slyvos.launcher.ui.widget.WidgetGridCanvas
 import com.slyvos.launcher.ui.widget.WidgetPickerSheet
 import com.slyvos.launcher.widget.SlyvosAppWidgetHost
@@ -60,9 +71,13 @@ fun HomeScreen(
     modifier: Modifier = Modifier,
     viewModel: HomeScreenViewModel = viewModel(
         factory = HomeScreenViewModelFactory(
-            PackageManagerAppRepository(LocalContext.current.applicationContext),
+            PackageManagerAppRepository(
+                LocalContext.current.applicationContext,
+                PreferencesPersonalizationRepository(LocalContext.current.applicationContext)
+            ),
             PreferencesWidgetRepository(LocalContext.current.applicationContext),
-            SystemWidgetDiscoveryRepository(LocalContext.current.applicationContext)
+            SystemWidgetDiscoveryRepository(LocalContext.current.applicationContext),
+            PreferencesPersonalizationRepository(LocalContext.current.applicationContext)
         )
     )
 ) {
@@ -86,11 +101,16 @@ fun HomeScreen(
         }
     }
 
-    // Widget Configuration Launcher
+    // Widget Configuration Activity Result Launcher
     val configLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        viewModel.onWidgetConfigureResult(result.resultCode, appWidgetHost)
+        viewModel.onWidgetConfigureResult(
+            context = context,
+            resultCode = result.resultCode,
+            appWidgetHost = appWidgetHost,
+            onLaunchConfigure = { intent, _ -> }
+        )
     }
 
     // Dynamic Bar Manager
@@ -108,26 +128,46 @@ fun HomeScreen(
     val dynamicBarSettings by dynamicBarManager.settings.collectAsState()
     val dynamicBarExpansion by dynamicBarManager.expansion.collectAsState()
     val isDynamicBarExpanded = dynamicBarExpansion == DynamicBarExpansion.EXPANDED
-    val isSettingsVisible by dynamicBarManager.isSettingsSheetVisible.collectAsState()
+    val isDynamicBarSettingsSheetVisible by dynamicBarManager.isSettingsSheetVisible.collectAsState()
+
+    // Open personalization sheet if dynamic bar gear settings icon is tapped
+    LaunchedEffect(isDynamicBarSettingsSheetVisible) {
+        if (isDynamicBarSettingsSheetVisible) {
+            dynamicBarManager.toggleSettingsSheet(false)
+            viewModel.setPersonalizationSheetVisible(true)
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.initTimeAndApps(context)
     }
 
-    BackHandler(enabled = isSettingsVisible || isDynamicBarExpanded || uiState.isDrawerVisible || uiState.isWidgetPickerVisible) {
+    var showHomeContextMenu by remember { mutableStateOf(false) }
+
+    BackHandler(
+        enabled = showHomeContextMenu || uiState.isPersonalizationSheetVisible || uiState.isDockAppPickerVisible || isDynamicBarExpanded || uiState.isDrawerVisible || uiState.isWidgetPickerVisible
+    ) {
         when {
-            isSettingsVisible -> dynamicBarManager.toggleSettingsSheet(false)
+            showHomeContextMenu -> showHomeContextMenu = false
+            uiState.isDockAppPickerVisible -> viewModel.setDockAppPickerVisible(false)
+            uiState.isPersonalizationSheetVisible -> viewModel.setPersonalizationSheetVisible(false)
             isDynamicBarExpanded -> dynamicBarManager.collapse()
             uiState.isWidgetPickerVisible -> viewModel.closeWidgetPicker()
             uiState.isDrawerVisible -> viewModel.setDrawerVisible(false)
         }
     }
 
-    // Liquid Minimal Ambient Background Gradient
+    // Apply Phase 6 Appearance Settings
+    val personalization = uiState.personalization
+    val appearance = personalization.appearance
+    val homeLayout = personalization.homeLayout
+    val cornerRadius = appearance.cornerGeometry.cornerDp.dp
+    val translucencyAlpha = appearance.transparencyLevel
+
     val backgroundGradient = Brush.verticalGradient(
         colors = listOf(
-            Color(0xFF0F141C),
-            Color(0xFF080B10),
+            Color(0xFF0F141C).copy(alpha = 1f - translucencyAlpha * 0.5f),
+            Color(0xFF080B10).copy(alpha = 1f - translucencyAlpha * 0.5f),
             Color(0xFF05070A)
         )
     )
@@ -137,8 +177,17 @@ fun HomeScreen(
             .fillMaxSize()
             .background(backgroundGradient)
             .pointerInput(Unit) {
+                detectTapGestures(
+                    onDoubleTap = {
+                        if (personalization.gestures.doubleTapAction == DoubleTapAction.EXPAND_DYNAMIC_BAR) {
+                            dynamicBarManager.handleTap()
+                        }
+                    }
+                )
+            }
+            .pointerInput(Unit) {
                 detectVerticalDragGestures { _, dragAmount ->
-                    if (dragAmount < -18f && !uiState.isDrawerVisible && !isDynamicBarExpanded && !uiState.isWidgetPickerVisible) {
+                    if (dragAmount < -18f && !uiState.isDrawerVisible && !isDynamicBarExpanded && !uiState.isWidgetPickerVisible && !uiState.isPersonalizationSheetVisible) {
                         viewModel.setDrawerVisible(true)
                     }
                 }
@@ -153,13 +202,19 @@ fun HomeScreen(
             // Permanent Dynamic Bar rendered at top
             DynamicBarContainer(manager = dynamicBarManager)
 
-            // Prominent minimal clock & date header (long press opens widget picker)
+            // Prominent minimal clock & date header
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .combinedClickable(
                         onClick = {},
-                        onLongClick = { viewModel.openWidgetPicker(context) }
+                        onLongClick = {
+                            if (personalization.gestures.longPressAction == LongPressAction.WIDGET_PICKER) {
+                                viewModel.openWidgetPicker(context)
+                            } else {
+                                viewModel.setPersonalizationSheetVisible(true)
+                            }
+                        }
                     )
             ) {
                 ClockHeader(
@@ -179,24 +234,24 @@ fun HomeScreen(
                     modifier = Modifier.weight(0.55f)
                 )
             } else {
-                // Add Widget Spatial Prompt Button
+                // Add Widget / Personalization Canvas Prompt
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 24.dp, vertical = 12.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color.White.copy(alpha = 0.04f))
+                        .clip(RoundedCornerShape(cornerRadius))
+                        .background(Color.White.copy(alpha = translucencyAlpha * 0.3f))
                         .combinedClickable(
-                            onClick = { viewModel.openWidgetPicker(context) },
-                            onLongClick = { viewModel.openWidgetPicker(context) }
+                            onClick = { showHomeContextMenu = true },
+                            onLongClick = { showHomeContextMenu = true }
                         )
                         .padding(vertical = 12.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "+ Add Widget to Canvas",
-                            color = Color.White.copy(alpha = 0.5f),
+                            text = "+ Add Widgets or Customize Slyvos",
+                            color = Color.White.copy(alpha = 0.6f),
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium
                         )
@@ -222,7 +277,7 @@ fun HomeScreen(
                         AppIconItem(
                             app = app,
                             onClick = { viewModel.launchApp(context, app) },
-                            iconSize = 48.dp,
+                            iconSize = homeLayout.iconSize.dpValue.dp,
                             showLabel = true
                         )
                     }
@@ -231,13 +286,71 @@ fun HomeScreen(
                 Spacer(modifier = Modifier.weight(0.45f))
             }
 
-            // Bottom floating translucent dock
-            DockSurface(
-                dockApps = uiState.dockApps,
-                onAppClick = { app -> viewModel.launchApp(context, app) },
-                onSwipeUpTrigger = { viewModel.setDrawerVisible(true) },
-                modifier = Modifier.padding(bottom = 12.dp)
-            )
+            // Floating dock
+            if (homeLayout.isDockVisible) {
+                DockSurface(
+                    dockApps = uiState.dockApps,
+                    onAppClick = { app -> viewModel.launchApp(context, app) },
+                    onSwipeUpTrigger = { viewModel.setDrawerVisible(true) },
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+            }
+        }
+
+        // Context Menu Overlay for Home Long-Press / Canvas Tap
+        if (showHomeContextMenu) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.5f))
+                    .clickable { showHomeContextMenu = false }
+            ) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color(0xFF161B26))
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Slyvos Canvas Options",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFF263238))
+                            .clickable {
+                                showHomeContextMenu = false
+                                viewModel.openWidgetPicker(context)
+                            }
+                            .padding(vertical = 12.dp, horizontal = 16.dp)
+                            .semantics { contentDescription = "Add Widget option" }
+                    ) {
+                        Text(text = "🧩 Add Widgets", color = Color.White, fontSize = 14.sp)
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFF1E88E5))
+                            .clickable {
+                                showHomeContextMenu = false
+                                viewModel.setPersonalizationSheetVisible(true)
+                            }
+                            .padding(vertical = 12.dp, horizontal = 16.dp)
+                            .semantics { contentDescription = "Personalization option" }
+                    ) {
+                        Text(text = "🎨 Personalization", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
         }
 
         // Swipe up App Drawer Sheet overlay
@@ -268,6 +381,31 @@ fun HomeScreen(
                     onLaunchConfigure = { intent, _ -> configLauncher.launch(intent) }
                 )
             },
+            animationPreference = dynamicBarSettings.animationPreference
+        )
+
+        // Phase 6 Personalization Sheet Overlay
+        PersonalizationSheet(
+            isVisible = uiState.isPersonalizationSheetVisible,
+            personalization = uiState.personalization,
+            dynamicBarSettings = dynamicBarSettings,
+            onUpdateHomeLayout = viewModel::updateHomeLayout,
+            onUpdateAppearance = viewModel::updateAppearance,
+            onUpdateGestures = viewModel::updateGestures,
+            onUpdateDynamicBarSettings = { transform ->
+                dynamicBarManager.updateSettings(transform)
+            },
+            onOpenDockPicker = { viewModel.setDockAppPickerVisible(true) },
+            onDismiss = { viewModel.setPersonalizationSheetVisible(false) }
+        )
+
+        // Phase 6 Dock App Picker Sheet Overlay
+        DockAppPickerSheet(
+            isVisible = uiState.isDockAppPickerVisible,
+            allApps = uiState.allApps,
+            selectedPackages = uiState.personalization.dock.customDockPackages,
+            onSaveDockApps = viewModel::saveDockPackages,
+            onDismiss = { viewModel.setDockAppPickerVisible(false) },
             animationPreference = dynamicBarSettings.animationPreference
         )
     }

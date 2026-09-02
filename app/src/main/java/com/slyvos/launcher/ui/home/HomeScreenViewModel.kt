@@ -10,9 +10,15 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.slyvos.launcher.data.model.AppDrawerFilter
 import com.slyvos.launcher.data.model.AppInfo
+import com.slyvos.launcher.data.model.AppearanceSettings
+import com.slyvos.launcher.data.model.GestureSettings
+import com.slyvos.launcher.data.model.HomeLayoutSettings
+import com.slyvos.launcher.data.model.SlyvosPersonalization
 import com.slyvos.launcher.data.model.SlyvosWidget
 import com.slyvos.launcher.data.model.SlyvosWidgetProviderInfo
 import com.slyvos.launcher.data.repository.AppRepository
+import com.slyvos.launcher.data.repository.PersonalizationRepository
+import com.slyvos.launcher.data.repository.PreferencesPersonalizationRepository
 import com.slyvos.launcher.data.repository.PreferencesWidgetRepository
 import com.slyvos.launcher.data.repository.SystemWidgetDiscoveryRepository
 import com.slyvos.launcher.data.repository.WidgetDiscoveryRepository
@@ -44,17 +50,32 @@ data class HomeUiState(
     val filteredWidgets: List<SlyvosWidgetProviderInfo> = emptyList(),
     val widgetSearchQuery: String = "",
     val isWidgetPickerVisible: Boolean = false,
-    val pendingConfigWidget: SlyvosWidget? = null
+    val pendingConfigWidget: SlyvosWidget? = null,
+    // Phase 6 Personalization State
+    val personalization: SlyvosPersonalization = SlyvosPersonalization(),
+    val isPersonalizationSheetVisible: Boolean = false,
+    val isDockAppPickerVisible: Boolean = false
 )
 
 class HomeScreenViewModel(
     private val appRepository: AppRepository,
     private val widgetRepository: WidgetRepository,
-    private val widgetDiscoveryRepository: WidgetDiscoveryRepository
+    private val widgetDiscoveryRepository: WidgetDiscoveryRepository,
+    private val personalizationRepository: PersonalizationRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            personalizationRepository.personalization.collect { p ->
+                _uiState.update { it.copy(personalization = p) }
+                // Reload dock apps when personalization changes
+                loadDockApps()
+            }
+        }
+    }
 
     fun initTimeAndApps(context: Context) {
         viewModelScope.launch {
@@ -78,6 +99,11 @@ class HomeScreenViewModel(
                 isLoadingApps = false
             )
         }
+    }
+
+    private suspend fun loadDockApps() {
+        val dock = appRepository.getDockApps()
+        _uiState.update { it.copy(dockApps = dock) }
     }
 
     private suspend fun loadWidgets() {
@@ -149,6 +175,35 @@ class HomeScreenViewModel(
         }
     }
 
+    // --- Phase 6 Personalization Management ---
+
+    fun setPersonalizationSheetVisible(visible: Boolean) {
+        _uiState.update { it.copy(isPersonalizationSheetVisible = visible) }
+    }
+
+    fun setDockAppPickerVisible(visible: Boolean) {
+        _uiState.update { it.copy(isDockAppPickerVisible = visible) }
+    }
+
+    fun updateHomeLayout(transform: (HomeLayoutSettings) -> HomeLayoutSettings) {
+        personalizationRepository.updateHomeLayout(transform)
+    }
+
+    fun updateAppearance(transform: (AppearanceSettings) -> AppearanceSettings) {
+        personalizationRepository.updateAppearance(transform)
+    }
+
+    fun updateGestures(transform: (GestureSettings) -> GestureSettings) {
+        personalizationRepository.updateGestures(transform)
+    }
+
+    fun saveDockPackages(packages: List<String>) {
+        personalizationRepository.updateDockPackages(packages)
+        viewModelScope.launch {
+            loadDockApps()
+        }
+    }
+
     // --- Phase 5 Widget Management ---
 
     fun openWidgetPicker(context: Context) {
@@ -193,16 +248,6 @@ class HomeScreenViewModel(
         val providerComponent = providerInfo.providerInfo.provider
         val bound = appWidgetManager.bindAppWidgetIdIfAllowed(appWidgetId, providerComponent)
 
-        if (!bound) {
-            // Launcher bound request fallback if required
-            val bindIntent = Intent(AppWidgetManager.ACTION_APPWIDGET_BIND).apply {
-                putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
-                putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, providerComponent)
-            }
-            onLaunchConfigure(bindIntent, appWidgetId)
-            return
-        }
-
         val newWidget = SlyvosWidget(
             appWidgetId = appWidgetId,
             providerPackage = providerComponent.packageName,
@@ -211,32 +256,65 @@ class HomeScreenViewModel(
             spanY = providerInfo.targetCellHeight
         )
 
+        // Store pending widget in state for result processing
+        _uiState.update { it.copy(pendingConfigWidget = newWidget) }
+
+        if (!bound) {
+            // Permission bind request dialog
+            val bindIntent = Intent(AppWidgetManager.ACTION_APPWIDGET_BIND).apply {
+                putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+                putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, providerComponent)
+            }
+            onLaunchConfigure(bindIntent, appWidgetId)
+            return
+        }
+
         val configureComponent = providerInfo.providerInfo.configure
         if (configureComponent != null) {
-            // Widget requires configuration activity
+            // Launch widget configuration activity
             val configIntent = Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE).apply {
                 component = configureComponent
                 putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
             }
-            _uiState.update { it.copy(pendingConfigWidget = newWidget) }
             onLaunchConfigure(configIntent, appWidgetId)
         } else {
-            // Directly add widget
+            // Directly save widget and close picker
             saveWidget(newWidget)
+            _uiState.update { it.copy(pendingConfigWidget = null) }
             closeWidgetPicker()
         }
     }
 
-    fun onWidgetConfigureResult(resultCode: Int, appWidgetHost: SlyvosAppWidgetHost) {
+    fun onWidgetConfigureResult(
+        context: Context,
+        resultCode: Int,
+        appWidgetHost: SlyvosAppWidgetHost,
+        onLaunchConfigure: (Intent, Int) -> Unit
+    ) {
         val pending = _uiState.value.pendingConfigWidget ?: return
         if (resultCode == Activity.RESULT_OK) {
-            saveWidget(pending)
-            closeWidgetPicker()
+            val appWidgetManager = AppWidgetManager.getInstance(context)
+            val info = appWidgetManager.getAppWidgetInfo(pending.appWidgetId)
+            val configureComponent = info?.configure
+
+            if (configureComponent != null && info != null) {
+                // If bind succeeded and widget has configure activity, launch configuration
+                val configIntent = Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE).apply {
+                    component = configureComponent
+                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, pending.appWidgetId)
+                }
+                onLaunchConfigure(configIntent, pending.appWidgetId)
+            } else {
+                // Finalize saving widget
+                saveWidget(pending)
+                _uiState.update { it.copy(pendingConfigWidget = null) }
+                closeWidgetPicker()
+            }
         } else {
-            // Configuration cancelled; delete allocated ID
+            // Configuration or bind cancelled; delete allocated ID to prevent orphaned IDs
             appWidgetHost.deleteAppWidgetId(pending.appWidgetId)
+            _uiState.update { it.copy(pendingConfigWidget = null) }
         }
-        _uiState.update { it.copy(pendingConfigWidget = null) }
     }
 
     private fun saveWidget(widget: SlyvosWidget) {
@@ -265,10 +343,16 @@ class HomeScreenViewModel(
 class HomeScreenViewModelFactory(
     private val appRepository: AppRepository,
     private val widgetRepository: WidgetRepository,
-    private val widgetDiscoveryRepository: WidgetDiscoveryRepository
+    private val widgetDiscoveryRepository: WidgetDiscoveryRepository,
+    private val personalizationRepository: PersonalizationRepository
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        return HomeScreenViewModel(appRepository, widgetRepository, widgetDiscoveryRepository) as T
+        return HomeScreenViewModel(
+            appRepository,
+            widgetRepository,
+            widgetDiscoveryRepository,
+            personalizationRepository
+        ) as T
     }
 }

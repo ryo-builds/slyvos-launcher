@@ -12,7 +12,8 @@ interface AppRepository {
 }
 
 class PackageManagerAppRepository(
-    private val context: Context
+    private val context: Context,
+    private val personalizationRepository: PersonalizationRepository? = null
 ) : AppRepository {
 
     override suspend fun getInstalledLauncherApps(): List<AppInfo> = withContext(Dispatchers.IO) {
@@ -37,23 +38,41 @@ class PackageManagerAppRepository(
 
     override suspend fun getDockApps(): List<AppInfo> = withContext(Dispatchers.IO) {
         val allApps = getInstalledLauncherApps()
-        val preferredPackages = listOf(
-            "com.google.android.dialer", "com.samsung.android.dialer", "com.android.dialer",
-            "com.google.android.apps.messaging", "com.samsung.android.messaging", "com.android.mms",
-            "com.android.chrome", "com.sec.android.app.sbrowser",
-            "com.google.android.GoogleCamera", "com.sec.android.app.camera", "com.android.camera",
-            "com.android.settings"
-        )
+        val customPackages = personalizationRepository?.getPersonalization()?.dock?.customDockPackages.orEmpty()
 
         val dockList = mutableListOf<AppInfo>()
-        for (pkg in preferredPackages) {
-            val found = allApps.firstOrNull { it.packageName == pkg }
-            if (found != null && !dockList.any { it.packageName == found.packageName }) {
-                dockList.add(found)
+
+        if (customPackages.isNotEmpty()) {
+            // Add custom packages if currently installed on device
+            for (pkg in customPackages) {
+                val found = allApps.firstOrNull { it.packageName == pkg }
+                if (found != null && !dockList.any { it.packageName == found.packageName }) {
+                    dockList.add(found)
+                }
+                if (dockList.size >= 5) break
             }
-            if (dockList.size >= 5) break
         }
 
+        // Default fallback packages if custom packages are fewer than 5 or not set
+        if (dockList.size < 5) {
+            val preferredPackages = listOf(
+                "com.google.android.dialer", "com.samsung.android.dialer", "com.android.dialer",
+                "com.google.android.apps.messaging", "com.samsung.android.messaging", "com.android.mms",
+                "com.android.chrome", "com.sec.android.app.sbrowser",
+                "com.google.android.GoogleCamera", "com.sec.android.app.camera", "com.android.camera",
+                "com.android.settings"
+            )
+
+            for (pkg in preferredPackages) {
+                val found = allApps.firstOrNull { it.packageName == pkg }
+                if (found != null && !dockList.any { it.packageName == found.packageName }) {
+                    dockList.add(found)
+                }
+                if (dockList.size >= 5) break
+            }
+        }
+
+        // General fallback if still < 5
         if (dockList.size < 5) {
             for (app in allApps) {
                 if (!dockList.any { it.packageName == app.packageName }) {
