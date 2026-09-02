@@ -13,6 +13,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -44,6 +45,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -52,7 +54,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.slyvos.launcher.data.model.BlurIntensity
 import com.slyvos.launcher.data.model.DoubleTapAction
 import com.slyvos.launcher.data.model.LongPressAction
 import com.slyvos.launcher.data.model.SurfaceAppearance
@@ -68,6 +69,7 @@ import com.slyvos.launcher.ui.home.components.AppDrawerSheet
 import com.slyvos.launcher.ui.home.components.AppIconItem
 import com.slyvos.launcher.ui.home.components.ClockHeader
 import com.slyvos.launcher.ui.home.components.DockSurface
+import com.slyvos.launcher.ui.home.model.WorkspaceGeometryCalculator
 import com.slyvos.launcher.ui.personalization.DockAppPickerSheet
 import com.slyvos.launcher.ui.personalization.PersonalizationSheet
 import com.slyvos.launcher.ui.widget.WidgetGridCanvas
@@ -92,6 +94,7 @@ fun HomeScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val configuration = LocalConfiguration.current
 
     // AppWidgetHost Lifecycle
     val appWidgetHost = remember {
@@ -169,14 +172,13 @@ fun HomeScreen(
         }
     }
 
-    // Apply Phase 6 Appearance Settings
+    // Apply Phase 6 Appearance & Layout Settings
     val personalization = uiState.personalization
     val appearance = personalization.appearance
     val homeLayout = personalization.homeLayout
     val gestures = personalization.gestures
     val cornerRadius = appearance.cornerGeometry.cornerDp.dp
     val translucencyAlpha = appearance.transparencyLevel
-    val gridSpacing = homeLayout.density.spacingDp.dp
 
     val backgroundModifier = when (appearance.surfaceAppearance) {
         SurfaceAppearance.SOLID_MINIMAL -> Modifier.background(Color(0xFF06080C))
@@ -212,7 +214,7 @@ fun HomeScreen(
         Modifier
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .pointerInput(Unit) {
@@ -236,6 +238,26 @@ fun HomeScreen(
                 }
             }
     ) {
+        // Single Authoritative Responsive Workspace Calculation
+        val geometry = remember(
+            maxWidth,
+            maxHeight,
+            configuration.orientation,
+            homeLayout.density,
+            homeLayout.iconSize,
+            homeLayout.isDockVisible
+        ) {
+            WorkspaceGeometryCalculator.calculate(
+                maxWidthDp = maxWidth,
+                maxHeightDp = maxHeight,
+                orientationConfig = configuration.orientation,
+                density = homeLayout.density,
+                iconSize = homeLayout.iconSize,
+                isDockVisible = homeLayout.isDockVisible,
+                isDynamicBarVisible = true
+            )
+        }
+
         // LAYER 1: Dedicated Background Surface Layer (Receives RenderEffect Blur)
         Box(
             modifier = Modifier
@@ -244,7 +266,7 @@ fun HomeScreen(
                 .then(backgroundBlurGraphicsLayer)
         )
 
-        // LAYER 2: Foreground UI Elements (Sharp, Readable, Crisp)
+        // LAYER 2: Foreground UI Elements (Sharp, Readable, Crisp, Responsive)
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -283,6 +305,7 @@ fun HomeScreen(
                     appWidgetHost = appWidgetHost,
                     onRemoveWidget = { id -> viewModel.removeWidget(id, appWidgetHost) },
                     onResizeWidget = viewModel::resizeWidget,
+                    geometry = geometry,
                     modifier = Modifier.weight(0.55f)
                 )
             } else {
@@ -290,7 +313,7 @@ fun HomeScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 12.dp)
+                        .padding(horizontal = geometry.sidePaddingDp, vertical = 12.dp)
                         .clip(RoundedCornerShape(cornerRadius))
                         .background(Color.White.copy(alpha = translucencyAlpha * 0.3f))
                         .combinedClickable(
@@ -315,12 +338,13 @@ fun HomeScreen(
 
             // Main desktop shortcut grid (installed apps)
             if (uiState.allApps.isNotEmpty()) {
-                val gridApps = uiState.allApps.take(8)
+                val gridAppsCount = if (geometry.columns > 4) 12 else 8
+                val gridApps = uiState.allApps.take(gridAppsCount)
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(4),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(gridSpacing),
-                    horizontalArrangement = Arrangement.spacedBy(gridSpacing),
+                    columns = GridCells.Fixed(geometry.columns),
+                    contentPadding = PaddingValues(horizontal = geometry.sidePaddingDp, vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(geometry.gridSpacingDp),
+                    horizontalArrangement = Arrangement.spacedBy(geometry.gridSpacingDp),
                     modifier = Modifier
                         .weight(0.45f)
                         .fillMaxWidth()
@@ -329,7 +353,7 @@ fun HomeScreen(
                         AppIconItem(
                             app = app,
                             onClick = { viewModel.launchApp(context, app) },
-                            iconSize = homeLayout.iconSize.dpValue.dp,
+                            iconSize = geometry.iconSizeDp,
                             showLabel = true,
                             iconPresentation = appearance.iconPresentation
                         )
@@ -350,40 +374,41 @@ fun HomeScreen(
                         } else {
                             viewModel.setDrawerVisible(true)
                         }
-                    },
-                    modifier = Modifier.padding(bottom = 12.dp)
+                    }
                 )
             }
         }
 
-        // Context Menu Overlay for Home Long-Press / Canvas Tap
+        // Home Long-Press / Tap Context Menu Sheet
         if (showHomeContextMenu) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.5f))
-                    .clickable { showHomeContextMenu = false }
+                    .clickable { showHomeContextMenu = false },
+                contentAlignment = Alignment.Center
             ) {
                 Column(
                     modifier = Modifier
-                        .align(Alignment.Center)
+                        .fillMaxWidth(0.85f)
                         .clip(RoundedCornerShape(20.dp))
-                        .background(Color(0xFF161B26))
-                        .padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                        .background(Color(0xFF141A24))
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text(
-                        text = "Slyvos Canvas Options",
+                        text = "Slyvos Quick Menu",
                         color = Color.White,
+                        fontWeight = FontWeight.Bold,
                         fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
+                        modifier = Modifier.padding(bottom = 4.dp)
                     )
 
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFF263238))
+                            .background(Color.White.copy(alpha = 0.08f))
                             .clickable {
                                 showHomeContextMenu = false
                                 viewModel.openWidgetPicker(context)
@@ -398,21 +423,36 @@ fun HomeScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFF1E88E5))
+                            .background(Color.White.copy(alpha = 0.08f))
                             .clickable {
                                 showHomeContextMenu = false
                                 viewModel.setPersonalizationSheetVisible(true)
                             }
                             .padding(vertical = 12.dp, horizontal = 16.dp)
-                            .semantics { contentDescription = "Personalization option" }
+                            .semantics { contentDescription = "Customize Slyvos option" }
                     ) {
-                        Text(text = "🎨 Personalization", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Text(text = "🎨 Customize Slyvos", color = Color.White, fontSize = 14.sp)
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.White.copy(alpha = 0.08f))
+                            .clickable {
+                                showHomeContextMenu = false
+                                viewModel.setDrawerVisible(true)
+                            }
+                            .padding(vertical = 12.dp, horizontal = 16.dp)
+                            .semantics { contentDescription = "Open App Drawer option" }
+                    ) {
+                        Text(text = "📱 Open App Drawer", color = Color.White, fontSize = 14.sp)
                     }
                 }
             }
         }
 
-        // Swipe up App Drawer Sheet overlay
+        // Real Installed-App Drawer Sheet
         AppDrawerSheet(
             isVisible = uiState.isDrawerVisible,
             allApps = uiState.filteredApps,
@@ -420,11 +460,13 @@ fun HomeScreen(
             onSearchQueryChange = viewModel::onSearchQueryChanged,
             onClearSearch = viewModel::clearSearchQuery,
             onDismiss = { viewModel.setDrawerVisible(false) },
-            onAppClick = { app -> viewModel.launchApp(context, app) },
-            animationPreference = dynamicBarSettings.animationPreference
+            onAppClick = { app ->
+                viewModel.launchApp(context, app)
+                viewModel.setDrawerVisible(false)
+            }
         )
 
-        // Phase 5 Widget Picker Sheet Overlay
+        // Native System Widget Picker Sheet
         WidgetPickerSheet(
             isVisible = uiState.isWidgetPickerVisible,
             availableWidgets = uiState.filteredWidgets,
@@ -437,35 +479,33 @@ fun HomeScreen(
                     context = context,
                     providerInfo = providerInfo,
                     appWidgetHost = appWidgetHost,
-                    onLaunchConfigure = { intent, _ -> configLauncher.launch(intent) }
+                    onLaunchConfigure = { intent, _ ->
+                        configLauncher.launch(intent)
+                    }
                 )
-            },
-            animationPreference = dynamicBarSettings.animationPreference
+            }
         )
 
-        // Phase 6 Personalization Sheet Overlay
+        // Phase 6 Personalization Sheet
         PersonalizationSheet(
             isVisible = uiState.isPersonalizationSheetVisible,
-            personalization = uiState.personalization,
+            personalization = personalization,
             dynamicBarSettings = dynamicBarSettings,
             onUpdateHomeLayout = viewModel::updateHomeLayout,
             onUpdateAppearance = viewModel::updateAppearance,
             onUpdateGestures = viewModel::updateGestures,
-            onUpdateDynamicBarSettings = { transform ->
-                dynamicBarManager.updateSettings(transform)
-            },
+            onUpdateDynamicBarSettings = dynamicBarManager::updateSettings,
             onOpenDockPicker = { viewModel.setDockAppPickerVisible(true) },
             onDismiss = { viewModel.setPersonalizationSheetVisible(false) }
         )
 
-        // Phase 6 Dock App Picker Sheet Overlay
+        // Phase 6 Dock Custom App Picker Sheet
         DockAppPickerSheet(
             isVisible = uiState.isDockAppPickerVisible,
             allApps = uiState.allApps,
-            selectedPackages = uiState.personalization.dock.customDockPackages,
+            selectedPackages = personalization.dock.customDockPackages,
             onSaveDockApps = viewModel::saveDockPackages,
-            onDismiss = { viewModel.setDockAppPickerVisible(false) },
-            animationPreference = dynamicBarSettings.animationPreference
+            onDismiss = { viewModel.setDockAppPickerVisible(false) }
         )
     }
 }
