@@ -16,6 +16,9 @@ import com.slyvos.launcher.data.model.SlyvosPersonalization
 import com.slyvos.launcher.data.model.SurfaceAppearance
 import com.slyvos.launcher.data.model.SwipeUpAction
 import com.slyvos.launcher.data.model.ThemeMode
+import com.slyvos.launcher.dynamicbar.model.AnimationPreference
+import com.slyvos.launcher.dynamicbar.model.DynamicBarSettings
+import com.slyvos.launcher.dynamicbar.model.GamingVisibilityMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,6 +31,7 @@ interface PersonalizationRepository {
     fun updateAppearance(transform: (AppearanceSettings) -> AppearanceSettings)
     fun updateGestures(transform: (GestureSettings) -> GestureSettings)
     fun updateDockPackages(packages: List<String>)
+    fun updateDynamicBarSettings(transform: (DynamicBarSettings) -> DynamicBarSettings)
 }
 
 class PreferencesPersonalizationRepository(
@@ -89,6 +93,20 @@ class PreferencesPersonalizationRepository(
         val dockRaw = prefs.getString("dock_packages", "") ?: ""
         val dockPackages = if (dockRaw.isBlank()) emptyList() else dockRaw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
+        // Dynamic Bar Preferences
+        val enableMusic = prefs.getBoolean("enable_music", true)
+        val enableTimer = prefs.getBoolean("enable_timer", true)
+        val enableCall = prefs.getBoolean("enable_call", true)
+        val enableScreenRecording = prefs.getBoolean("enable_screen_recording", true)
+
+        val gamingMode = try {
+            GamingVisibilityMode.valueOf(prefs.getString("gaming_mode", GamingVisibilityMode.ALWAYS_SHOW.name) ?: GamingVisibilityMode.ALWAYS_SHOW.name)
+        } catch (e: Exception) { GamingVisibilityMode.ALWAYS_SHOW }
+
+        val animPref = try {
+            AnimationPreference.valueOf(prefs.getString("anim_pref", AnimationPreference.STANDARD.name) ?: AnimationPreference.STANDARD.name)
+        } catch (e: Exception) { AnimationPreference.STANDARD }
+
         return SlyvosPersonalization(
             homeLayout = HomeLayoutSettings(
                 iconSize = iconSize,
@@ -110,6 +128,15 @@ class PreferencesPersonalizationRepository(
             ),
             dock = DockSettings(
                 customDockPackages = dockPackages
+            ),
+            dynamicBar = DynamicBarSettings(
+                enableMusic = enableMusic,
+                enableTimer = enableTimer,
+                enableCall = enableCall,
+                enableScreenRecording = enableScreenRecording,
+                gamingMode = gamingMode,
+                animationPreference = animPref,
+                isGamingActive = false
             )
         )
     }
@@ -129,6 +156,12 @@ class PreferencesPersonalizationRepository(
             .putString("gesture_double_tap", p.gestures.doubleTapAction.name)
             .putString("gesture_long_press", p.gestures.longPressAction.name)
             .putString("dock_packages", p.dock.customDockPackages.joinToString(","))
+            .putBoolean("enable_music", p.dynamicBar.enableMusic)
+            .putBoolean("enable_timer", p.dynamicBar.enableTimer)
+            .putBoolean("enable_call", p.dynamicBar.enableCall)
+            .putBoolean("enable_screen_recording", p.dynamicBar.enableScreenRecording)
+            .putString("gaming_mode", p.dynamicBar.gamingMode.name)
+            .putString("anim_pref", p.dynamicBar.animationPreference.name)
             .apply()
     }
 
@@ -159,6 +192,14 @@ class PreferencesPersonalizationRepository(
     override fun updateDockPackages(packages: List<String>) {
         _personalization.update { current ->
             val updated = current.copy(dock = current.dock.copy(customDockPackages = packages))
+            savePersonalization(updated)
+            updated
+        }
+    }
+
+    override fun updateDynamicBarSettings(transform: (DynamicBarSettings) -> DynamicBarSettings) {
+        _personalization.update { current ->
+            val updated = current.copy(dynamicBar = transform(current.dynamicBar))
             savePersonalization(updated)
             updated
         }

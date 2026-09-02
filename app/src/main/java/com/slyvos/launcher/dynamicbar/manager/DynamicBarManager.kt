@@ -2,6 +2,8 @@ package com.slyvos.launcher.dynamicbar.manager
 
 import android.content.Context
 import com.slyvos.launcher.BuildConfig
+import com.slyvos.launcher.data.repository.PersonalizationRepository
+import com.slyvos.launcher.data.repository.PreferencesPersonalizationRepository
 import com.slyvos.launcher.dynamicbar.model.AnimationPreference
 import com.slyvos.launcher.dynamicbar.model.DynamicActivityState
 import com.slyvos.launcher.dynamicbar.model.DynamicBarExpansion
@@ -20,12 +22,14 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class DynamicBarManager(
     private val context: Context,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val personalizationRepository: PersonalizationRepository = PreferencesPersonalizationRepository(context)
 ) {
     val quickSettingsManager = SystemQuickSettingsManager(context)
     val mediaObserver = MediaSessionManagerObserver(context)
@@ -56,10 +60,14 @@ class DynamicBarManager(
     val apkDownloader = ApkDownloader(context)
     val apkInstaller = ApkInstaller(context)
 
-    private val prefs = context.getSharedPreferences("slyvos_dynamic_bar_prefs", Context.MODE_PRIVATE)
-
-    private val _settings = MutableStateFlow(loadSettings())
-    val settings: StateFlow<DynamicBarSettings> = _settings.asStateFlow()
+    // DynamicBarSettings synchronized from unified PersonalizationRepository
+    val settings: StateFlow<DynamicBarSettings> = personalizationRepository.personalization
+        .map { it.dynamicBar }
+        .stateIn(
+            scope = scope,
+            started = SharingStarted.Eagerly,
+            initialValue = personalizationRepository.getPersonalization().dynamicBar
+        )
 
     private val _expansion = MutableStateFlow(DynamicBarExpansion.COLLAPSED)
     val expansion: StateFlow<DynamicBarExpansion> = _expansion.asStateFlow()
@@ -69,7 +77,7 @@ class DynamicBarManager(
 
     @Suppress("UNCHECKED_CAST")
     val activeState: StateFlow<DynamicActivityState> = combine(
-        _settings,
+        settings,
         _expansion,
         callManager.callState,
         timerManager.timerState,
@@ -126,33 +134,6 @@ class DynamicBarManager(
         }
     }
 
-    private fun loadSettings(): DynamicBarSettings {
-        return DynamicBarSettings(
-            enableMusic = prefs.getBoolean("enable_music", true),
-            enableTimer = prefs.getBoolean("enable_timer", true),
-            enableCall = prefs.getBoolean("enable_call", true),
-            enableScreenRecording = prefs.getBoolean("enable_screen_recording", true),
-            gamingMode = try {
-                GamingVisibilityMode.valueOf(prefs.getString("gaming_mode", GamingVisibilityMode.ALWAYS_SHOW.name) ?: GamingVisibilityMode.ALWAYS_SHOW.name)
-            } catch (e: Exception) { GamingVisibilityMode.ALWAYS_SHOW },
-            animationPreference = try {
-                AnimationPreference.valueOf(prefs.getString("anim_pref", AnimationPreference.STANDARD.name) ?: AnimationPreference.STANDARD.name)
-            } catch (e: Exception) { AnimationPreference.STANDARD },
-            isGamingActive = false
-        )
-    }
-
-    private fun saveSettings(s: DynamicBarSettings) {
-        prefs.edit()
-            .putBoolean("enable_music", s.enableMusic)
-            .putBoolean("enable_timer", s.enableTimer)
-            .putBoolean("enable_call", s.enableCall)
-            .putBoolean("enable_screen_recording", s.enableScreenRecording)
-            .putString("gaming_mode", s.gamingMode.name)
-            .putString("anim_pref", s.animationPreference.name)
-            .apply()
-    }
-
     private fun computeEffectiveState(
         set: DynamicBarSettings,
         exp: DynamicBarExpansion,
@@ -205,11 +186,9 @@ class DynamicBarManager(
         _isSettingsSheetVisible.value = visible
     }
 
-    // Settings Updates
+    // Settings Updates delegated to PersonalizationRepository
     fun updateSettings(transform: (DynamicBarSettings) -> DynamicBarSettings) {
-        val updated = transform(_settings.value)
-        _settings.value = updated
-        saveSettings(updated)
+        personalizationRepository.updateDynamicBarSettings(transform)
     }
 
     fun setMusicEnabled(enabled: Boolean) = updateSettings { it.copy(enableMusic = enabled) }

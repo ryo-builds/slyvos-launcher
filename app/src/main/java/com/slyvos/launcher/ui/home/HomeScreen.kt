@@ -1,5 +1,8 @@
 package com.slyvos.launcher.ui.home
 
+import android.graphics.RenderEffect
+import android.graphics.Shader
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -38,6 +41,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -47,8 +52,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.slyvos.launcher.data.model.BlurIntensity
 import com.slyvos.launcher.data.model.DoubleTapAction
 import com.slyvos.launcher.data.model.LongPressAction
+import com.slyvos.launcher.data.model.SurfaceAppearance
+import com.slyvos.launcher.data.model.SwipeUpAction
 import com.slyvos.launcher.data.repository.PackageManagerAppRepository
 import com.slyvos.launcher.data.repository.PreferencesPersonalizationRepository
 import com.slyvos.launcher.data.repository.PreferencesWidgetRepository
@@ -113,9 +121,13 @@ fun HomeScreen(
         )
     }
 
-    // Dynamic Bar Manager
+    // Dynamic Bar Manager synchronized with PersonalizationRepository
     val dynamicBarManager = remember {
-        DynamicBarManager(context.applicationContext, scope)
+        DynamicBarManager(
+            context.applicationContext,
+            scope,
+            PreferencesPersonalizationRepository(context.applicationContext)
+        )
     }
 
     DisposableEffect(Unit) {
@@ -161,25 +173,53 @@ fun HomeScreen(
     val personalization = uiState.personalization
     val appearance = personalization.appearance
     val homeLayout = personalization.homeLayout
+    val gestures = personalization.gestures
     val cornerRadius = appearance.cornerGeometry.cornerDp.dp
     val translucencyAlpha = appearance.transparencyLevel
+    val gridSpacing = homeLayout.density.spacingDp.dp
 
-    val backgroundGradient = Brush.verticalGradient(
-        colors = listOf(
-            Color(0xFF0F141C).copy(alpha = 1f - translucencyAlpha * 0.5f),
-            Color(0xFF080B10).copy(alpha = 1f - translucencyAlpha * 0.5f),
-            Color(0xFF05070A)
+    val backgroundModifier = when (appearance.surfaceAppearance) {
+        SurfaceAppearance.SOLID_MINIMAL -> Modifier.background(Color(0xFF06080C))
+        SurfaceAppearance.AMBIENT_GRADIENT -> Modifier.background(
+            Brush.verticalGradient(
+                colors = listOf(
+                    Color(0xFF0F141C),
+                    Color(0xFF1A2332),
+                    Color(0xFF0A0F18)
+                )
+            )
         )
-    )
+        SurfaceAppearance.LIQUID_TRANSLUCENT -> Modifier.background(
+            Brush.verticalGradient(
+                colors = listOf(
+                    Color(0xFF0F141C).copy(alpha = 1f - translucencyAlpha * 0.4f),
+                    Color(0xFF080B10).copy(alpha = 1f - translucencyAlpha * 0.4f),
+                    Color(0xFF05070A)
+                )
+            )
+        )
+    }
+
+    val blurRadius = appearance.blurIntensity.blurRadiusDp
+    val graphicsLayerModifier = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && blurRadius > 0f) {
+        Modifier.graphicsLayer {
+            renderEffect = RenderEffect.createBlurEffect(
+                blurRadius, blurRadius, Shader.TileMode.CLAMP
+            ).asComposeRenderEffect()
+        }
+    } else {
+        Modifier
+    }
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(backgroundGradient)
+            .then(backgroundModifier)
+            .then(graphicsLayerModifier)
             .pointerInput(Unit) {
                 detectTapGestures(
                     onDoubleTap = {
-                        if (personalization.gestures.doubleTapAction == DoubleTapAction.EXPAND_DYNAMIC_BAR) {
+                        if (gestures.doubleTapAction == DoubleTapAction.EXPAND_DYNAMIC_BAR) {
                             dynamicBarManager.handleTap()
                         }
                     }
@@ -188,7 +228,11 @@ fun HomeScreen(
             .pointerInput(Unit) {
                 detectVerticalDragGestures { _, dragAmount ->
                     if (dragAmount < -18f && !uiState.isDrawerVisible && !isDynamicBarExpanded && !uiState.isWidgetPickerVisible && !uiState.isPersonalizationSheetVisible) {
-                        viewModel.setDrawerVisible(true)
+                        if (gestures.swipeUpAction == SwipeUpAction.PERSONALIZATION_SHEET) {
+                            viewModel.setPersonalizationSheetVisible(true)
+                        } else {
+                            viewModel.setDrawerVisible(true)
+                        }
                     }
                 }
             }
@@ -209,7 +253,7 @@ fun HomeScreen(
                     .combinedClickable(
                         onClick = {},
                         onLongClick = {
-                            if (personalization.gestures.longPressAction == LongPressAction.WIDGET_PICKER) {
+                            if (gestures.longPressAction == LongPressAction.WIDGET_PICKER) {
                                 viewModel.openWidgetPicker(context)
                             } else {
                                 viewModel.setPersonalizationSheetVisible(true)
@@ -267,8 +311,8 @@ fun HomeScreen(
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(4),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(gridSpacing),
+                    horizontalArrangement = Arrangement.spacedBy(gridSpacing),
                     modifier = Modifier
                         .weight(0.45f)
                         .fillMaxWidth()
@@ -278,7 +322,8 @@ fun HomeScreen(
                             app = app,
                             onClick = { viewModel.launchApp(context, app) },
                             iconSize = homeLayout.iconSize.dpValue.dp,
-                            showLabel = true
+                            showLabel = true,
+                            iconPresentation = appearance.iconPresentation
                         )
                     }
                 }
@@ -291,7 +336,13 @@ fun HomeScreen(
                 DockSurface(
                     dockApps = uiState.dockApps,
                     onAppClick = { app -> viewModel.launchApp(context, app) },
-                    onSwipeUpTrigger = { viewModel.setDrawerVisible(true) },
+                    onSwipeUpTrigger = {
+                        if (gestures.swipeUpAction == SwipeUpAction.PERSONALIZATION_SHEET) {
+                            viewModel.setPersonalizationSheetVisible(true)
+                        } else {
+                            viewModel.setDrawerVisible(true)
+                        }
+                    },
                     modifier = Modifier.padding(bottom = 12.dp)
                 )
             }

@@ -1,10 +1,8 @@
 package com.slyvos.launcher.data
 
-import com.slyvos.launcher.data.model.AppearanceSettings
 import com.slyvos.launcher.data.model.CornerGeometry
 import com.slyvos.launcher.data.model.DockSettings
-import com.slyvos.launcher.data.model.GestureSettings
-import com.slyvos.launcher.data.model.HomeLayoutSettings
+import com.slyvos.launcher.data.model.DoubleTapAction
 import com.slyvos.launcher.data.model.IconPresentation
 import com.slyvos.launcher.data.model.IconSize
 import com.slyvos.launcher.data.model.LayoutDensity
@@ -13,6 +11,8 @@ import com.slyvos.launcher.data.model.SlyvosPersonalization
 import com.slyvos.launcher.data.model.SurfaceAppearance
 import com.slyvos.launcher.data.model.SwipeUpAction
 import com.slyvos.launcher.data.model.ThemeMode
+import com.slyvos.launcher.dynamicbar.model.AnimationPreference
+import com.slyvos.launcher.dynamicbar.model.GamingVisibilityMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -34,9 +34,17 @@ class PersonalizationRepositoryTest {
         assertEquals(IconPresentation.FULL_COLOR, initial.appearance.iconPresentation)
 
         assertEquals(SwipeUpAction.APP_DRAWER, initial.gestures.swipeUpAction)
+        assertEquals(DoubleTapAction.NONE, initial.gestures.doubleTapAction)
         assertEquals(LongPressAction.PERSONALIZATION_SHEET, initial.gestures.longPressAction)
 
         assertTrue(initial.dock.customDockPackages.isEmpty())
+
+        assertTrue(initial.dynamicBar.enableMusic)
+        assertTrue(initial.dynamicBar.enableTimer)
+        assertTrue(initial.dynamicBar.enableCall)
+        assertTrue(initial.dynamicBar.enableScreenRecording)
+        assertEquals(GamingVisibilityMode.ALWAYS_SHOW, initial.dynamicBar.gamingMode)
+        assertEquals(AnimationPreference.STANDARD, initial.dynamicBar.animationPreference)
     }
 
     @Test
@@ -72,6 +80,22 @@ class PersonalizationRepositoryTest {
     }
 
     @Test
+    fun testUpdateGestures() {
+        val initial = SlyvosPersonalization()
+        val updated = initial.copy(
+            gestures = initial.gestures.copy(
+                swipeUpAction = SwipeUpAction.PERSONALIZATION_SHEET,
+                doubleTapAction = DoubleTapAction.EXPAND_DYNAMIC_BAR,
+                longPressAction = LongPressAction.WIDGET_PICKER
+            )
+        )
+
+        assertEquals(SwipeUpAction.PERSONALIZATION_SHEET, updated.gestures.swipeUpAction)
+        assertEquals(DoubleTapAction.EXPAND_DYNAMIC_BAR, updated.gestures.doubleTapAction)
+        assertEquals(LongPressAction.WIDGET_PICKER, updated.gestures.longPressAction)
+    }
+
+    @Test
     fun testUpdateDockPackages() {
         val packages = listOf("com.android.chrome", "com.google.android.dialer")
         val initial = SlyvosPersonalization()
@@ -80,5 +104,21 @@ class PersonalizationRepositoryTest {
         assertEquals(2, updated.dock.customDockPackages.size)
         assertEquals("com.android.chrome", updated.dock.customDockPackages[0])
         assertEquals("com.google.android.dialer", updated.dock.customDockPackages[1])
+    }
+
+    @Test
+    fun testUpdateDynamicBarSettings() {
+        val initial = SlyvosPersonalization()
+        val updated = initial.copy(
+            dynamicBar = initial.dynamicBar.copy(
+                enableMusic = false,
+                enableTimer = true,
+                animationPreference = AnimationPreference.REDUCED
+            )
+        )
+
+        assertFalse(updated.dynamicBar.enableMusic)
+        assertTrue(updated.dynamicBar.enableTimer)
+        assertEquals(AnimationPreference.REDUCED, updated.dynamicBar.animationPreference)
     }
 }

@@ -25,6 +25,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
@@ -34,6 +36,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.slyvos.launcher.data.model.AppInfo
+import com.slyvos.launcher.data.model.IconPresentation
 
 @Composable
 fun AppIconItem(
@@ -42,7 +45,8 @@ fun AppIconItem(
     modifier: Modifier = Modifier,
     iconSize: Dp = 52.dp,
     showLabel: Boolean = true,
-    labelColor: Color = Color.White.copy(alpha = 0.9f)
+    labelColor: Color = Color.White.copy(alpha = 0.9f),
+    iconPresentation: IconPresentation = IconPresentation.FULL_COLOR
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
@@ -54,6 +58,14 @@ fun AppIconItem(
 
     val imageBitmap = remember(app.icon) {
         app.icon?.toImageBitmap()
+    }
+
+    val colorFilter = remember(iconPresentation) {
+        if (iconPresentation == IconPresentation.MINIMAL_MONO) {
+            ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(0f) })
+        } else {
+            null
+        }
     }
 
     Column(
@@ -71,6 +83,7 @@ fun AppIconItem(
             Image(
                 bitmap = imageBitmap,
                 contentDescription = app.label,
+                colorFilter = colorFilter,
                 modifier = Modifier
                     .size(iconSize)
                     .clip(RoundedCornerShape(16.dp))

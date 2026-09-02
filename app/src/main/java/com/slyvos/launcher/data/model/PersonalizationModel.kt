@@ -1,15 +1,17 @@
 package com.slyvos.launcher.data.model
 
+import com.slyvos.launcher.dynamicbar.model.DynamicBarSettings
+
 enum class IconSize(val dpValue: Int) {
     SMALL(40),
     MEDIUM(48),
     LARGE(56)
 }
 
-enum class LayoutDensity {
-    COMPACT,
-    BALANCED,
-    SPACIOUS
+enum class LayoutDensity(val spacingDp: Int) {
+    COMPACT(8),
+    BALANCED(12),
+    SPACIOUS(18)
 }
 
 enum class ThemeMode {
@@ -30,10 +32,10 @@ enum class CornerGeometry(val cornerDp: Int) {
     PILL(28)
 }
 
-enum class BlurIntensity {
-    DISABLED,
-    SUBTLE,
-    RICH
+enum class BlurIntensity(val blurRadiusDp: Float) {
+    DISABLED(0f),
+    SUBTLE(15f),
+    RICH(30f)
 }
 
 enum class IconPresentation {
@@ -85,5 +87,6 @@ data class SlyvosPersonalization(
     val homeLayout: HomeLayoutSettings = HomeLayoutSettings(),
     val appearance: AppearanceSettings = AppearanceSettings(),
     val gestures: GestureSettings = GestureSettings(),
-    val dock: DockSettings = DockSettings()
+    val dock: DockSettings = DockSettings(),
+    val dynamicBar: DynamicBarSettings = DynamicBarSettings()
 )
