@@ -5,11 +5,23 @@ import com.slyvos.launcher.data.model.SlyvosWidget
 import org.json.JSONArray
 import org.json.JSONObject
 
+data class PendingWidgetState(
+    val appWidgetId: Int,
+    val providerPackage: String,
+    val providerClass: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
 interface WidgetRepository {
     suspend fun getPlacedWidgets(): List<SlyvosWidget>
     suspend fun saveWidget(widget: SlyvosWidget)
     suspend fun removeWidget(appWidgetId: Int)
     suspend fun updateWidgetPosition(appWidgetId: Int, row: Int, col: Int, spanX: Int, spanY: Int)
+    
+    // Pending Widget State Persistence
+    fun savePendingWidgetState(appWidgetId: Int, providerPackage: String, providerClass: String)
+    fun getPendingWidgetState(): PendingWidgetState?
+    fun clearPendingWidgetState()
 }
 
 class PreferencesWidgetRepository(context: Context) : WidgetRepository {
@@ -57,6 +69,37 @@ class PreferencesWidgetRepository(context: Context) : WidgetRepository {
         }
     }
 
+    override fun savePendingWidgetState(appWidgetId: Int, providerPackage: String, providerClass: String) {
+        prefs.edit()
+            .putInt(KEY_PENDING_ID, appWidgetId)
+            .putString(KEY_PENDING_PKG, providerPackage)
+            .putString(KEY_PENDING_CLS, providerClass)
+            .putLong(KEY_PENDING_TIME, System.currentTimeMillis())
+            .apply()
+    }
+
+    override fun getPendingWidgetState(): PendingWidgetState? {
+        val id = prefs.getInt(KEY_PENDING_ID, -1)
+        val pkg = prefs.getString(KEY_PENDING_PKG, null)
+        val cls = prefs.getString(KEY_PENDING_CLS, null)
+        val time = prefs.getLong(KEY_PENDING_TIME, 0L)
+
+        return if (id != -1 && !pkg.isNullOrEmpty() && !cls.isNullOrEmpty()) {
+            PendingWidgetState(id, pkg, cls, time)
+        } else {
+            null
+        }
+    }
+
+    override fun clearPendingWidgetState() {
+        prefs.edit()
+            .remove(KEY_PENDING_ID)
+            .remove(KEY_PENDING_PKG)
+            .remove(KEY_PENDING_CLS)
+            .remove(KEY_PENDING_TIME)
+            .apply()
+    }
+
     private fun persistWidgets(widgets: List<SlyvosWidget>) {
         val jsonArray = JSONArray()
         for (w in widgets) {
@@ -77,6 +120,10 @@ class PreferencesWidgetRepository(context: Context) : WidgetRepository {
     companion object {
         private const val PREFS_NAME = "slyvos_widgets_prefs"
         private const val KEY_WIDGETS = "placed_widgets"
+        private const val KEY_PENDING_ID = "pending_widget_id"
+        private const val KEY_PENDING_PKG = "pending_widget_pkg"
+        private const val KEY_PENDING_CLS = "pending_widget_cls"
+        private const val KEY_PENDING_TIME = "pending_widget_time"
 
         fun parseWidgetsJson(jsonString: String): List<SlyvosWidget> {
             val list = mutableListOf<SlyvosWidget>()

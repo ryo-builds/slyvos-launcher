@@ -2,6 +2,7 @@ package com.slyvos.launcher.ui.home
 
 import android.app.Activity
 import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.text.format.DateFormat
@@ -17,6 +18,7 @@ import com.slyvos.launcher.data.model.SlyvosPersonalization
 import com.slyvos.launcher.data.model.SlyvosWidget
 import com.slyvos.launcher.data.model.SlyvosWidgetProviderInfo
 import com.slyvos.launcher.data.repository.AppRepository
+import com.slyvos.launcher.data.repository.PendingWidgetState
 import com.slyvos.launcher.data.repository.PersonalizationRepository
 import com.slyvos.launcher.data.repository.PreferencesPersonalizationRepository
 import com.slyvos.launcher.data.repository.PreferencesWidgetRepository
@@ -68,19 +70,45 @@ class HomeScreenViewModel(
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
     init {
+        // Observe real-time app list changes
+        viewModelScope.launch {
+            appRepository.appsFlow.collect { apps ->
+                if (apps.isNotEmpty()) {
+                    val filtered = AppDrawerFilter.filterAndSort(apps, _uiState.value.searchQuery)
+                    _uiState.update {
+                        it.copy(
+                            allApps = apps,
+                            filteredApps = filtered,
+                            isLoadingApps = false
+                        )
+                    }
+                    loadDockApps()
+                }
+            }
+        }
+
+        // Observe personalization changes
         viewModelScope.launch {
             personalizationRepository.personalization.collect { p ->
                 _uiState.update { it.copy(personalization = p) }
-                // Reload dock apps when personalization changes
                 loadDockApps()
             }
         }
+
+        // Start listening to real-time Android package changes
+        appRepository.startObservingPackageChanges(viewModelScope)
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        appRepository.stopObservingPackageChanges()
     }
 
     fun initTimeAndApps(context: Context) {
         viewModelScope.launch {
             loadApps()
             loadWidgets()
+            recoverPendingWidgetState(context)
         }
         viewModelScope.launch {
             tickClock(context)
@@ -88,9 +116,9 @@ class HomeScreenViewModel(
     }
 
     private suspend fun loadApps() {
-        val dock = appRepository.getDockApps()
         val all = appRepository.getInstalledLauncherApps()
-        val sortedAll = AppDrawerFilter.filterAndSort(all, "")
+        val dock = appRepository.getDockApps()
+        val sortedAll = AppDrawerFilter.filterAndSort(all, _uiState.value.searchQuery)
         _uiState.update {
             it.copy(
                 dockApps = dock,
@@ -107,8 +135,32 @@ class HomeScreenViewModel(
     }
 
     private suspend fun loadWidgets() {
-        val widgets = widgetRepository.getPlacedWidgets()
-        _uiState.update { it.copy(placedWidgets = widgets) }
+        val placed = widgetRepository.getPlacedWidgets()
+        _uiState.update { it.copy(placedWidgets = placed) }
+    }
+
+    private fun recoverPendingWidgetState(context: Context) {
+        val pending = widgetRepository.getPendingWidgetState() ?: return
+        val appWidgetManager = AppWidgetManager.getInstance(context)
+        val info = appWidgetManager.getAppWidgetInfo(pending.appWidgetId)
+
+        if (info != null) {
+            // Check if widget is already saved
+            val isAlreadyPlaced = _uiState.value.placedWidgets.any { it.appWidgetId == pending.appWidgetId }
+            if (!isAlreadyPlaced) {
+                val newWidget = SlyvosWidget(
+                    appWidgetId = pending.appWidgetId,
+                    providerPackage = pending.providerPackage,
+                    providerClass = pending.providerClass,
+                    spanX = 2,
+                    spanY = 2
+                )
+                saveWidget(newWidget)
+            }
+        } else {
+            // Provider unavailable or canceled; clear pending state
+            widgetRepository.clearPendingWidgetState()
+        }
     }
 
     private suspend fun tickClock(context: Context) {
@@ -117,15 +169,15 @@ class HomeScreenViewModel(
             val is24Hour = DateFormat.is24HourFormat(context)
 
             val timePattern = if (is24Hour) "HH:mm" else "h:mm"
-            val timeFormat = SimpleDateFormat(timePattern, Locale.getDefault())
-            val timeString = timeFormat.format(now)
-
             val amPmPattern = if (is24Hour) "" else "a"
-            val amPmFormat = SimpleDateFormat(amPmPattern, Locale.getDefault())
-            val amPmString = amPmFormat.format(now).uppercase()
-
             val datePattern = "EEEE, MMMM d"
+
+            val timeFormat = SimpleDateFormat(timePattern, Locale.getDefault())
+            val amPmFormat = SimpleDateFormat(amPmPattern, Locale.getDefault())
             val dateFormat = SimpleDateFormat(datePattern, Locale.getDefault())
+
+            val timeString = timeFormat.format(now)
+            val amPmString = amPmFormat.format(now)
             val dateString = dateFormat.format(now)
 
             _uiState.update {
@@ -204,7 +256,7 @@ class HomeScreenViewModel(
         }
     }
 
-    // --- Phase 5 Widget Management ---
+    // --- Phase 5 & 7.1 Widget Management ---
 
     fun openWidgetPicker(context: Context) {
         viewModelScope.launch {
@@ -256,7 +308,8 @@ class HomeScreenViewModel(
             spanY = providerInfo.targetCellHeight
         )
 
-        // Store pending widget in state for result processing
+        // Persist pending widget state across activity/process lifecycle
+        widgetRepository.savePendingWidgetState(appWidgetId, providerComponent.packageName, providerComponent.className)
         _uiState.update { it.copy(pendingConfigWidget = newWidget) }
 
         if (!bound) {
@@ -278,8 +331,9 @@ class HomeScreenViewModel(
             }
             onLaunchConfigure(configIntent, appWidgetId)
         } else {
-            // Directly save widget and close picker
+            // Directly save widget and clear pending state
             saveWidget(newWidget)
+            widgetRepository.clearPendingWidgetState()
             _uiState.update { it.copy(pendingConfigWidget = null) }
             closeWidgetPicker()
         }
@@ -291,7 +345,12 @@ class HomeScreenViewModel(
         appWidgetHost: SlyvosAppWidgetHost,
         onLaunchConfigure: (Intent, Int) -> Unit
     ) {
-        val pending = _uiState.value.pendingConfigWidget ?: return
+        val pending = _uiState.value.pendingConfigWidget 
+            ?: widgetRepository.getPendingWidgetState()?.let { state ->
+                SlyvosWidget(state.appWidgetId, state.providerPackage, state.providerClass)
+            } 
+            ?: return
+
         if (resultCode == Activity.RESULT_OK) {
             val appWidgetManager = AppWidgetManager.getInstance(context)
             val info = appWidgetManager.getAppWidgetInfo(pending.appWidgetId)
@@ -305,14 +364,16 @@ class HomeScreenViewModel(
                 }
                 onLaunchConfigure(configIntent, pending.appWidgetId)
             } else {
-                // Finalize saving widget
+                // Finalize saving widget and clear pending state
                 saveWidget(pending)
+                widgetRepository.clearPendingWidgetState()
                 _uiState.update { it.copy(pendingConfigWidget = null) }
                 closeWidgetPicker()
             }
         } else {
             // Configuration or bind cancelled; delete allocated ID to prevent orphaned IDs
             appWidgetHost.deleteAppWidgetId(pending.appWidgetId)
+            widgetRepository.clearPendingWidgetState()
             _uiState.update { it.copy(pendingConfigWidget = null) }
         }
     }
@@ -320,6 +381,7 @@ class HomeScreenViewModel(
     private fun saveWidget(widget: SlyvosWidget) {
         viewModelScope.launch {
             widgetRepository.saveWidget(widget)
+            widgetRepository.clearPendingWidgetState()
             loadWidgets()
         }
     }
